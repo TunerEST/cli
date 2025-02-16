@@ -6,6 +6,7 @@ use clap::Subcommand;
 use reqwest::header::USER_AGENT;
 use semver::VersionReq;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sha3::{Digest, Sha3_256};
 use std::fs;
 use std::io::Cursor;
@@ -30,6 +31,9 @@ pub enum Index {
 		/// Existing access token to use
 		#[clap(long)]
 		token: Option<String>,
+
+		#[clap(long, conflicts_with = "token")]
+		github_token: Option<String>
 	},
 
 	/// Invalidate all existing access tokens (logout)
@@ -216,16 +220,7 @@ fn create_mod(download_link: &str, config: &mut Config) {
 
 	let client = reqwest::blocking::Client::new();
 
-	#[derive(Serialize)]
-	struct Payload {
-		download_link: String,
-	}
-
-	let payload = Payload {
-		download_link: download_link.to_string(),
-	};
-
-	let url = get_index_url("/v1/mods".to_string(), config);
+	let url = get_index_url("/v1/mods", config);
 
 	info!("Creating mod");
 
@@ -233,7 +228,7 @@ fn create_mod(download_link: &str, config: &mut Config) {
 		.post(url)
 		.header(USER_AGENT, "GeodeCLI")
 		.bearer_auth(config.index_token.clone().unwrap())
-		.json(&payload)
+		.json(&json!({ "download_link": download_link }))
 		.send()
 		.nice_unwrap("Unable to connect to Geode Index");
 
@@ -260,15 +255,6 @@ fn update_mod(id: &str, download_link: &str, config: &mut Config) {
 
 	let client = reqwest::blocking::Client::new();
 
-	#[derive(Serialize)]
-	struct Payload {
-		download_link: String,
-	}
-
-	let payload = Payload {
-		download_link: download_link.to_string(),
-	};
-
 	let url = get_index_url(format!("/v1/mods/{}/versions", id), config);
 
 	info!("Updating mod");
@@ -277,7 +263,7 @@ fn update_mod(id: &str, download_link: &str, config: &mut Config) {
 		.post(url)
 		.header(USER_AGENT, "GeodeCLI")
 		.bearer_auth(config.index_token.clone().unwrap())
-		.json(&payload)
+		.json(&json!({ "download_link": download_link }))
 		.send()
 		.nice_unwrap("Unable to connect to Geode Index");
 
@@ -308,11 +294,11 @@ fn set_index_url(url: String, config: &mut Config) {
 	info!("Index URL set to: {}", config.index_url);
 }
 
-pub fn get_index_url(path: String, config: &Config) -> String {
+pub fn get_index_url(path: impl AsRef<str>, config: &Config) -> String {
 	format!(
 		"{}/{}",
 		config.index_url.trim_end_matches('/'),
-		path.trim_start_matches('/')
+		path.as_ref().trim_start_matches('/')
 	)
 }
 
@@ -366,16 +352,16 @@ pub fn subcommand(cmd: Index) {
 	let config = &mut _config;
 	match cmd {
 		Index::Install { id, version } => {
-			let mut config = Config::new().assert_is_setup();
+			let config = Config::new().assert_is_setup();
 			install_mod(
-				&mut config,
+				&config,
 				&id,
 				&version.unwrap_or(VersionReq::STAR),
 				false,
 			);
 			done!("Mod installed");
 		}
-		Index::Login { token } => index_auth::login(config, token),
+		Index::Login { token, github_token } => index_auth::login(config, token, github_token),
 		Index::Invalidate => index_auth::invalidate(config),
 		Index::Url { url } => {
 			if let Some(u) = url {

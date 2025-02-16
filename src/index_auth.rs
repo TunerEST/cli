@@ -1,7 +1,8 @@
 #[cfg(not(target_os = "android"))]
 use cli_clipboard::ClipboardProvider;
 use reqwest::header::USER_AGENT;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde_json::json;
 
 use crate::{
 	config::Config, done, fatal, index, info, logging::ask_value, server::ApiResponse, warn,
@@ -14,11 +15,6 @@ struct LoginAttempt {
 	interval: i32,
 	uri: String,
 	code: String,
-}
-
-#[derive(Serialize)]
-struct LoginPoll {
-	uuid: String,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -37,7 +33,7 @@ pub fn copy_token(token: &str) {
 	}
 }
 
-pub fn login(config: &mut Config, token: Option<String>) {
+pub fn login(config: &mut Config, token: Option<String>, github_token: Option<String>) {
 	if let Some(token) = token {
 		config.index_token = Some(token);
 		config.save();
@@ -54,8 +50,28 @@ pub fn login(config: &mut Config, token: Option<String>) {
 
 	let client = reqwest::blocking::Client::new();
 
+	if let Some(github_token) = github_token {
+		let response = client
+			.post(index::get_index_url("/v1/login/github/token", config))
+			.header(USER_AGENT, "GeodeCli")
+			.json(&json!({ "token": github_token }))
+			.send()
+			.nice_unwrap("Unable to connect to Geode Index");
+
+		let parsed: ApiResponse<String> = match response.status().as_u16() {
+			400 => fatal!("Invalid Github Token"),
+			200 => response.json().nice_unwrap("Unable to parse login response"),
+			_ => fatal!("Unable to connect to Geode Index"),
+		};
+
+		config.index_token = Some(parsed.payload);
+		config.save();
+		done!("Successfully logged in via Github token");
+		return;
+	}
+
 	let response: reqwest::blocking::Response = client
-		.post(index::get_index_url("/v1/login/github".to_string(), config))
+		.post(index::get_index_url("/v1/login/github", config))
 		.header(USER_AGENT, "GeodeCli")
 		.json(&{})
 		.send()
@@ -98,16 +114,12 @@ fn poll_login(
 	uuid: &str,
 	config: &mut Config,
 ) -> Option<String> {
-	let body: LoginPoll = LoginPoll {
-		uuid: uuid.to_string(),
-	};
-
 	let response = client
 		.post(index::get_index_url(
-			"/v1/login/github/poll".to_string(),
+			"/v1/login/github/poll",
 			config,
 		))
-		.json(&body)
+		.json(&json!({ "uuid": uuid }))
 		.header(USER_AGENT, "GeodeCLI")
 		.send()
 		.nice_unwrap("Unable to connect to Geode Index");
@@ -164,7 +176,7 @@ fn invalidate_index_tokens(config: &mut Config) {
 	let client = reqwest::blocking::Client::new();
 
 	let response = client
-		.delete(index::get_index_url("/v1/me/tokens".to_string(), config))
+		.delete(index::get_index_url("/v1/me/tokens", config))
 		.header(USER_AGENT, "GeodeCLI")
 		.bearer_auth(token)
 		.send()
